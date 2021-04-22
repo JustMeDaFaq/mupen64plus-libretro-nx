@@ -657,7 +657,7 @@ void retro_init(void)
     mbstowcs(w_pathname, pathname, PATH_SIZE);
     if (!osal_path_existsW(w_pathname) || !osal_is_directory(w_pathname))
         osal_mkdirp(w_pathname);
-    copy_file(inifile, "mupen64plus.ini");
+    //copy_file(inifile, "mupen64plus.ini");
 
     struct retro_log_callback log;
     unsigned colorMode = RETRO_PIXEL_FORMAT_XRGB8888;
