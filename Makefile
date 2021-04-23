@@ -27,6 +27,7 @@ UNAME=$(shell uname -a)
 ROOT_DIR := .
 LIBRETRO_DIR := $(ROOT_DIR)/libretro
 DEPSDIR	:=	$(CURDIR)/
+ANGLE_DIR ?= $(ROOT_DIR)/../ANGLE
 
 ifeq ($(platform),)
    platform = unix
@@ -481,9 +482,9 @@ else
    LDFLAGS += -shared -static-libgcc -static-libstdc++ -Wl,--version-script=$(LIBRETRO_DIR)/link.T #-static -lmingw32 -lSDL2main -lSDL2 -mwindows -lm -ldinput8 -ldxguid -ldxerr8 -luser32 -lgdi32 -lwinmm -limm32 -lole32 -loleaut32 -lshell32 -lversion -luuid  -lsdl2_net -lsdl2 -lws2_32 -lSetupapi -lIPHLPAPI
    ifeq ($(HAVE_ANGLE),1)
       GLES3 = 1
-      INCFLAGS += -I$(ROOT_DIR)/../ANGLE/include
-      GL_LIB = -L$(ROOT_DIR)/../ANGLE -lGLESv2
-      EGL_LIB = -L$(ROOT_DIR)/../ANGLE -lEGL
+      INCFLAGS += -I$(ANGLE_DIR)/include
+      GL_LIB = -L$(ANGLE_DIR) -lGLESv2
+      EGL_LIB = -L$(ANGLE_DIR) -lEGL
       COREFLAGS += -g 
    else
       GL_LIB := -lopengl32
