@@ -514,7 +514,7 @@ else
    endif
    HAVE_THR_AL = 1
    LLE = 1
-   COREFLAGS += -DOS_WINDOWS -DMINGW
+   COREFLAGS += -DOS_WINDOWS -DMINGW -DUNICODE
    CXXFLAGS += -fpermissive
 endif
 
@@ -586,6 +586,7 @@ else
 	LDFLAGS    += $(fpic) -O3 $(CPUOPTS) $(PLATCFLAGS) $(CPUFLAGS)
 endif
 
+-include $(OBJECTS:.o=.d)
 all: $(TARGET)
 $(TARGET): $(OBJECTS)
 
@@ -618,4 +619,3 @@ clean:
 	rm -f $(TARGET)
 
 .PHONY: clean
--include $(OBJECTS:.o=.d)

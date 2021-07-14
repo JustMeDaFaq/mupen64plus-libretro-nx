@@ -55,6 +55,7 @@ SOURCES_C = \
 	$(CORE_DIR)/src/device/cart/cart_rom.c \
 	$(CORE_DIR)/src/device/cart/eeprom.c \
 	$(CORE_DIR)/src/device/cart/flashram.c \
+	$(CORE_DIR)/src/device/cart/is_viewer.c \
 	$(CORE_DIR)/src/device/cart/sram.c \
 	$(CORE_DIR)/src/device/controllers/game_controller.c \
 	$(CORE_DIR)/src/device/controllers/paks/biopak.c \
@@ -62,6 +63,7 @@ SOURCES_C = \
 	$(CORE_DIR)/src/device/controllers/paks/rumblepak.c \
 	$(CORE_DIR)/src/device/controllers/paks/transferpak.c \
 	$(CORE_DIR)/src/device/dd/dd_controller.c \
+	$(CORE_DIR)/src/device/dd/disk.c \
 	$(CORE_DIR)/src/device/device.c \
 	$(CORE_DIR)/src/device/gb/gb_cart.c \
 	$(CORE_DIR)/src/device/gb/mbc3_rtc.c \
@@ -278,7 +280,6 @@ SOURCES_CXX   += \
     $(VIDEODIR_GLIDEN64)/src/gDP.cpp                                                              \
     $(VIDEODIR_GLIDEN64)/src/GLideN64.cpp                                                         \
     $(VIDEODIR_GLIDEN64)/src/gSP.cpp                                                              \
-    $(VIDEODIR_GLIDEN64)/src/Keys.cpp                                                             \
     $(VIDEODIR_GLIDEN64)/src/N64.cpp                                                              \
     $(VIDEODIR_GLIDEN64)/src/TextDrawer.cpp                                                       \
     $(VIDEODIR_GLIDEN64)/src/PaletteTexture.cpp                                                   \
