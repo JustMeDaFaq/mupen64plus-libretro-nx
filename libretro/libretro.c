@@ -166,12 +166,14 @@ uint32_t EnableDitheringQuantization = 0;
 uint32_t EnableHWLighting = 0;
 uint32_t CorrectTexrectCoords = 0;
 uint32_t EnableTexCoordBounds = 0;
+uint32_t EnableInaccurateTextureCoordinates = 0;
 uint32_t enableNativeResTexrects = 0;
 uint32_t enableLegacyBlending = 0;
 uint32_t EnableCopyColorToRDRAM = 0;
 uint32_t EnableCopyDepthToRDRAM = 0;
 uint32_t AspectRatio = 0;
 uint32_t MaxTxCacheSize = 0;
+uint32_t MaxHiResTxVramLimit = 0;
 uint32_t txFilterMode = 0;
 uint32_t txEnhancementMode = 0;
 uint32_t txHiresEnable = 0;
@@ -206,6 +208,7 @@ uint32_t OverscanBottom = 0;
 
 uint32_t EnableFullspeed = 0;
 uint32_t CountPerOp = 0;
+uint32_t CountPerOpDenomPot = 0;
 uint32_t CountPerScanlineOverride = 0;
 uint32_t ForceDisableExtraMem = 0;
 uint32_t IgnoreTLBExceptions = 0;
@@ -608,7 +611,7 @@ void retro_set_environment(retro_environment_t cb)
 void retro_get_system_info(struct retro_system_info *info)
 {
     info->library_name = "Mupen64Plus-Next";
-    info->library_version = "2.3" FLAVOUR_VERSION GIT_VERSION;
+    info->library_version = "2.4" FLAVOUR_VERSION GIT_VERSION;
     info->valid_extensions = "n64|v64|z64|bin|u1";
     info->need_fullpath = false;
     info->block_extract = false;
@@ -1039,6 +1042,13 @@ static void update_variables(bool startup)
           EnableTexCoordBounds = !strcmp(var.value, "False") ? 0 : 1;
        }
 
+       var.key = CORE_NAME "-EnableInaccurateTextureCoordinates";
+       var.value = NULL;
+       if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+       {
+          EnableInaccurateTextureCoordinates = !strcmp(var.value, "False") ? 0 : 1;
+       }
+
        var.key = CORE_NAME "-BackgroundMode";
        var.value = NULL;
        if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
@@ -1145,6 +1155,13 @@ static void update_variables(bool startup)
        if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
        {
           txHiresFullAlphaChannel = !strcmp(var.value, "False") ? 0 : 1;
+       }
+
+       var.key = CORE_NAME "-MaxHiResTxVramLimit";
+       var.value = NULL;
+       if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+       {
+          MaxHiResTxVramLimit = atoi(var.value);
        }
 
        var.key = CORE_NAME "-MaxTxCacheSize";
@@ -1309,6 +1326,13 @@ static void update_variables(bool startup)
           CountPerOp = atoi(var.value);
        }
        
+       var.key = CORE_NAME "-CountPerOpDenomPot";
+       var.value = NULL;
+       if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+       {
+          CountPerOpDenomPot = atoi(var.value);
+       }
+
        if(EnableFullspeed)
        {
           CountPerOp = 1; // Force CountPerOp == 1
@@ -1763,7 +1787,10 @@ bool retro_load_game(const struct retro_game_info *game)
     char* newPath;
 
     // Workaround for broken subsystem on static platforms
-    if(!retro_dd_path_img)
+    // Note: game->path can be NULL if loading from a archive
+    // Current impl. uses mupen internals so that wouldn't work either way for dd/tpak
+    // So we just sanity check
+    if(!retro_dd_path_img && game->path)
     {
         gamePath = (char*)game->path;
         newPath = (char*)calloc(1, strlen(gamePath)+5);
@@ -1780,45 +1807,45 @@ bool retro_load_game(const struct retro_game_info *game)
         }
     }
     
-   if (!retro_transferpak_rom_path)
-   {
-      gamePath = (char *)game->path;
-      newPath = (char *)calloc(1, strlen(gamePath) + 4);
-      strcpy(newPath, gamePath);
-      strcat(newPath, ".gb");
-      FILE *fileTest = fopen(newPath, "r");
-      if (!fileTest)
-      {
-         free(newPath);
-      }
-      else
-      {
-         fclose(fileTest);
-         // Free'd later in Mupen Core
-         retro_transferpak_rom_path = newPath;
-
-         // We have a gb rom!
-         if (!retro_transferpak_ram_path)
-         {
-            gamePath = (char *)game->path;
-            newPath = (char *)calloc(1, strlen(gamePath) + 5);
-            strcpy(newPath, gamePath);
-            strcat(newPath, ".sav");
-            FILE *fileTest = fopen(newPath, "r");
-            if (!fileTest)
-            {
-               free(newPath);
-            }
-            else
-            {
-               fclose(fileTest);
-               // Free'd later in Mupen Core
-               retro_transferpak_ram_path = newPath;
-            }
-         }
-      }
-   }
-
+    if (!retro_transferpak_rom_path && game->path)
+    {
+       gamePath = (char *)game->path;
+       newPath = (char *)calloc(1, strlen(gamePath) + 4);
+       strcpy(newPath, gamePath);
+       strcat(newPath, ".gb");
+       FILE *fileTest = fopen(newPath, "r");
+       if (!fileTest)
+       {
+          free(newPath);
+       }
+       else
+       {
+          fclose(fileTest);
+          // Free'd later in Mupen Core
+          retro_transferpak_rom_path = newPath;
+ 
+          // We have a gb rom!
+          if (!retro_transferpak_ram_path)
+          {
+             gamePath = (char *)game->path;
+             newPath = (char *)calloc(1, strlen(gamePath) + 5);
+             strcpy(newPath, gamePath);
+             strcat(newPath, ".sav");
+             FILE *fileTest = fopen(newPath, "r");
+             if (!fileTest)
+             {
+                free(newPath);
+             }
+             else
+             {
+                fclose(fileTest);
+                // Free'd later in Mupen Core
+                retro_transferpak_ram_path = newPath;
+             }
+          }
+       }
+    }
+ 
     // Init default vals
     retro_savestate_complete = true;
     load_game_successful = false;
