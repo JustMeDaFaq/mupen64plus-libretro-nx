@@ -103,6 +103,8 @@ QString ConfigDialog::_hotkeyDescription(quint32 _idx) const
 		return tr("Toggle OSD rendering resolution");
 	case Config::HotKey::hkForceGammaCorrection:
 		return tr("Toggle force gamma correction");
+	case Config::HotKey::hkInaccurateTexCords:
+		return tr("Toggle inaccurate texture coordinates");
 	}
 	return tr("Unknown hotkey");
 }
@@ -125,12 +127,39 @@ void ConfigDialog::_init(bool reInit, bool blockCustomSettings)
 	m_blockReInit = true;
 
 	if (reInit && m_romName != nullptr && ui->customSettingsCheckBox->isChecked() && ui->settingsDestGameRadioButton->isChecked()) {
-		loadCustomRomSettings(m_strIniPath, m_romName);
+		loadCustomRomSettings(m_strIniPath, m_strSharedIniPath, m_romName);
 	} else if (reInit) {
-		loadSettings(m_strIniPath);
+		loadSettings(m_strIniPath, m_strSharedIniPath);
 	}
 
 	// Video settings
+#ifdef M64P_GLIDENUI
+	ui->fullScreenRadioButton->setChecked(true);
+	ui->fullScreenRadioButton->setVisible(false);
+	ui->borderlessRadioButton->setVisible(false);;
+	ui->borderlessComboBox->setVisible(false);
+#else
+	ui->fullScreenRadioButton->toggle();
+	ui->borderlessRadioButton->setChecked(config.video.borderless != 0u);
+	ui->fullScreenRadioButton->setChecked(config.video.borderless == 0u);
+	ui->fullscreenResolutionLabel->setVisible(false);
+	m_displayInfo = getDisplayInfo();
+	if (m_displayInfo.size() > 1)
+	{
+		int borderlessDeviceCurrent = -1;
+		ui->borderlessComboBox->clear();
+		for (size_t i = 0; i < m_displayInfo.size(); ++i) {
+			ui->borderlessComboBox->addItem(m_displayInfo[i].m_displayName);
+			if (m_displayInfo[i].m_deviceName.toStdWString() == config.video.deviceName)
+				borderlessDeviceCurrent = i;
+		}
+		if (borderlessDeviceCurrent > -1)
+			ui->borderlessComboBox->setCurrentIndex(borderlessDeviceCurrent);
+	}
+	else
+		ui->borderlessComboBox->setVisible(false);
+#endif
+
 	QStringList windowedModesList;
 	int windowedModesCurrent = -1;
 	for (unsigned int i = 0; i < numWindowedModes; ++i) {
@@ -168,6 +197,11 @@ void ConfigDialog::_init(bool reInit, bool blockCustomSettings)
 	QStringList fullscreenModesList, fullscreenRatesList;
 	int fullscreenMode, fullscreenRate;
 	fillFullscreenResolutionsList(fullscreenModesList, fullscreenMode, fullscreenRatesList, fullscreenRate);
+#ifdef M64P_GLIDENUI
+	if (fullscreenModesList.isEmpty() && fullscreenRatesList.isEmpty()) {
+		ui->fullScreenResolutionFrame->setVisible(false);
+	}
+#endif
 	ui->fullScreenResolutionComboBox->clear();
 	ui->fullScreenResolutionComboBox->insertItems(0, fullscreenModesList);
 	ui->fullScreenResolutionComboBox->setCurrentIndex(fullscreenMode);
@@ -446,14 +480,15 @@ void ConfigDialog::_init(bool reInit, bool blockCustomSettings)
 
 void ConfigDialog::_getTranslations(QStringList & _translationFiles) const
 {
-	QDir pluginFolder(m_strIniPath);
+	QDir pluginFolder(m_strSharedIniPath);
 	QStringList nameFilters("gliden64_*.qm");
 	_translationFiles = pluginFolder.entryList(nameFilters, QDir::Files, QDir::Name);
 }
 
-void ConfigDialog::setIniPath(const QString & _strIniPath)
+void ConfigDialog::setIniPath(const QString & _strIniPath, const QString & _strSharedIniPath)
 {
 	m_strIniPath = _strIniPath;
+	m_strSharedIniPath = _strSharedIniPath;
 
 	QStringList translationFiles;
 	_getTranslations(translationFiles);
@@ -528,6 +563,12 @@ void ConfigDialog::accept(bool justSave) {
 		config.video.windowedWidth = windowedResolutionDimensions[0].trimmed().toInt();
 		config.video.windowedHeight = windowedResolutionDimensions[1].trimmed().toInt();
 	}
+
+#ifndef M64P_GLIDENUI
+	config.video.borderless = ui->borderlessRadioButton->isChecked() ? 1 : 0;
+	const size_t deviceIdx = m_displayInfo.size() > 1 ? ui->borderlessComboBox->currentIndex() : 0u;
+	config.video.deviceName[m_displayInfo[deviceIdx].m_deviceName.toWCharArray(config.video.deviceName)] = L'\0';
+#endif
 
 	getFullscreenResolutions(ui->fullScreenResolutionComboBox->currentIndex(), config.video.fullscreenWidth, config.video.fullscreenHeight);
 	getFullscreenRefreshRate(ui->fullScreenRefreshRateComboBox->currentIndex(), config.video.fullscreenRefresh);
@@ -758,7 +799,7 @@ void ConfigDialog::accept(bool justSave) {
 		config.debug.dumpMode |= DEBUG_DETAIL;
 
 	if (config.generalEmulation.enableCustomSettings && ui->settingsDestGameRadioButton->isChecked() && m_romName != nullptr)
-		saveCustomRomSettings(m_strIniPath, m_romName);
+		saveCustomRomSettings(m_strIniPath, m_strSharedIniPath, m_romName);
 	else
 		writeSettings(m_strIniPath);
 
@@ -801,8 +842,8 @@ void ConfigDialog::on_buttonBox_clicked(QAbstractButton *button)
 			QMessageBox::RestoreDefaults | QMessageBox::Cancel, this
 			);
 		msgBox.setDefaultButton(QMessageBox::Cancel);
-		msgBox.setButtonText(QMessageBox::RestoreDefaults, tr("Restore Defaults"));
-		msgBox.setButtonText(QMessageBox::Cancel, tr("Cancel"));
+		msgBox.button(QMessageBox::RestoreDefaults)->setText(tr("Restore Defaults"));
+		msgBox.button(QMessageBox::Cancel)->setText(tr("Cancel"));
 		if (msgBox.exec() == QMessageBox::RestoreDefaults) {
 			const u32 enableCustomSettings = config.generalEmulation.enableCustomSettings;
 			resetSettings(m_strIniPath);
@@ -982,8 +1023,11 @@ void ConfigDialog::on_tabWidget_currentChanged(int tab)
 		while (fontIt.hasNext()) {
 			QString font = fontIt.next();
 			int id = QFontDatabase::addApplicationFont(font);
-			QString fontListFamily = QFontDatabase::applicationFontFamilies(id).at(0);
-			internalFontList[fontListFamily].append(font);
+			QStringList fontListFamilies = QFontDatabase::applicationFontFamilies(id);
+			if (!fontListFamilies.isEmpty()) {
+				QString fontListFamily = fontListFamilies.at(0);
+				internalFontList[fontListFamily].append(font);
+			}
 		}
 
 		QMap<QString, QStringList>::const_iterator i;
@@ -1021,7 +1065,7 @@ void ConfigDialog::setTitle()
 	setWindowTitle(tr("GLideN64 Settings"));
 }
 
-void ConfigDialog::on_profilesComboBox_currentIndexChanged(const QString &profile)
+void ConfigDialog::on_profilesComboBox_currentTextChanged(const QString &profile)
 {
 	ui->settingsDestProfileRadioButton->setChecked(true);
 	if (profile == tr("New...")) {
@@ -1068,7 +1112,7 @@ void ConfigDialog::on_profilesComboBox_currentIndexChanged(const QString &profil
 		}
 		return;
 	}
-	changeProfile(m_strIniPath, profile);
+	changeProfile(m_strIniPath, m_strSharedIniPath, profile);
 	_init(true);
 }
 
@@ -1090,13 +1134,13 @@ void ConfigDialog::on_removeProfilePushButton_clicked()
 	QMessageBox msgBox(QMessageBox::Warning, tr("Remove Profile"),
 		msg, QMessageBox::Yes | QMessageBox::Cancel, this);
 	msgBox.setDefaultButton(QMessageBox::Cancel);
-	msgBox.setButtonText(QMessageBox::Yes, tr("Remove"));
-	msgBox.setButtonText(QMessageBox::No, tr("Cancel"));
+	msgBox.button(QMessageBox::Yes)->setText(tr("Remove"));
+	msgBox.button(QMessageBox::Cancel)->setText(tr("Cancel"));
 	if (msgBox.exec() == QMessageBox::Yes) {
 		removeProfile(m_strIniPath, profile);
 		ui->profilesComboBox->blockSignals(true);
 		ui->profilesComboBox->removeItem(ui->profilesComboBox->currentIndex());
-		changeProfile(m_strIniPath, ui->profilesComboBox->itemText(ui->profilesComboBox->currentIndex()));
+		changeProfile(m_strIniPath, m_strSharedIniPath, ui->profilesComboBox->itemText(ui->profilesComboBox->currentIndex()));
 		ui->profilesComboBox->blockSignals(false);
 		_init(true);
 		ui->removeProfilePushButton->setDisabled(ui->profilesComboBox->count() == 3);

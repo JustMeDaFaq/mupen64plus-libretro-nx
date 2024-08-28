@@ -400,10 +400,6 @@ static void n64StateCallback(void *Context, m64p_core_param param_type, int new_
 
 static bool emu_step_load_data()
 {
-    m64p_error ret = CoreStartup(FRONTEND_API_VERSION, ".", ".", NULL, n64DebugCallback, 0, n64StateCallback);
-    if(ret && log_cb)
-        log_cb(RETRO_LOG_ERROR, CORE_NAME ": failed to initialize core (err=%i)\n", ret);
-
     log_cb(RETRO_LOG_DEBUG, CORE_NAME ": [EmuThread] M64CMD_ROM_OPEN\n");
 
     if(CoreDoCommand(M64CMD_ROM_OPEN, game_size, (void*)game_data))
@@ -652,7 +648,7 @@ void retro_set_environment(retro_environment_t cb)
 void retro_get_system_info(struct retro_system_info *info)
 {
     info->library_name = "Mupen64Plus-Next";
-    info->library_version = "2.4" FLAVOUR_VERSION GIT_VERSION;
+    info->library_version = "2.7" FLAVOUR_VERSION GIT_VERSION;
     info->valid_extensions = "n64|v64|z64|bin|u1";
     info->need_fullpath = false;
     info->block_extract = false;
@@ -733,8 +729,12 @@ void retro_init(void)
         initializing = true;
 
         retro_thread = co_active();
-        game_thread = co_create(65536 * sizeof(void*) * 16, EmuThreadFunction);
+        game_thread = co_create(65536 * sizeof(void*) * 16, (void (*)(void))EmuThreadFunction);
     }
+
+    m64p_error ret = CoreStartup(FRONTEND_API_VERSION, ".", ".", NULL, n64DebugCallback, 0, n64StateCallback);
+    if(ret && log_cb)
+        log_cb(RETRO_LOG_ERROR, CORE_NAME ": failed to initialize core (err=%i)\n", ret);
 }
 
 void retro_deinit(void)
@@ -746,9 +746,11 @@ void retro_deinit(void)
        {
            CoreDoCommand(M64CMD_STOP, 0, NULL);
            co_switch(game_thread); /* Let the core thread finish */
+           CoreDoCommand(M64CMD_ROM_CLOSE, 0, NULL);
        }
     }
 
+    CoreShutdown();
     deinit_audio_libretro();
 
     if (perf_cb.perf_log)
@@ -918,18 +920,36 @@ static void update_variables(bool startup)
 #endif 
           }
        }
-
-       if(current_rdp_type == RDP_PLUGIN_GLIDEN64 && EnableThreadedRenderer)
-       {
-          unsigned poll_type_early      = 1; /* POLL_TYPE_EARLY */
-          environ_cb(RETRO_ENVIRONMENT_POLL_TYPE_OVERRIDE, &poll_type_early);
-       }
        
+#ifdef IOS
+       bool can_jit = false;
+       if (!environ_cb(RETRO_ENVIRONMENT_GET_JIT_CAPABLE, &can_jit) || !can_jit)
+       {
+          if(current_rsp_type == RSP_PLUGIN_PARALLEL)
+          {
+#if defined(HAVE_LLE)
+             plugin_connect_rsp_api(RSP_PLUGIN_CXD4);
+             log_cb(RETRO_LOG_INFO, "Selected Parallel RSP without JIT, falling back to CXD4!\n");
+#else
+             log_cb(RETRO_LOG_INFO, "Selected Parallel RSP without JIT, falling back to GLideN64!\n");
+             plugin_connect_rsp_api(RSP_PLUGIN_HLE);
+             plugin_connect_rdp_api(RDP_PLUGIN_GLIDEN64);
+#endif
+          }
+       }
+#endif
+
        var.key = CORE_NAME "-ThreadedRenderer";
        var.value = NULL;
        if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
        {
           EnableThreadedRenderer = !strcmp(var.value, "True") ? 1 : 0;
+       }
+	    
+       if(current_rdp_type == RDP_PLUGIN_GLIDEN64 && EnableThreadedRenderer)
+       {
+          unsigned poll_type_early      = 1; /* POLL_TYPE_EARLY */
+          environ_cb(RETRO_ENVIRONMENT_POLL_TYPE_OVERRIDE, &poll_type_early);
        }
 
        var.key = CORE_NAME "-BilinearMode";
@@ -1750,10 +1770,23 @@ static void format_saved_memory(void)
     format_sram(saved_memory.sram);
     format_eeprom(saved_memory.eeprom, EEPROM_MAX_SIZE);
     format_flashram(saved_memory.flashram);
-    format_mempak(saved_memory.mempack + 0 * MEMPAK_SIZE);
-    format_mempak(saved_memory.mempack + 1 * MEMPAK_SIZE);
-    format_mempak(saved_memory.mempack + 2 * MEMPAK_SIZE);
-    format_mempak(saved_memory.mempack + 3 * MEMPAK_SIZE);
+
+    for (int i = 0; i < GAME_CONTROLLERS_COUNT; ++i)
+    {
+      // Generate a random serial ID
+      uint32_t serial[6];
+      int k;
+      for (k = 0; k < 6; ++k)
+      {
+         serial[k] = xoshiro256pp_next(&l_mpk_idgen);
+      }
+
+    format_mempak(saved_memory.mempack + i * MEMPAK_SIZE,
+        serial,
+        DEFAULT_MEMPAK_DEVICEID,
+        DEFAULT_MEMPAK_BANKS,
+        DEFAULT_MEMPAK_VERSION);
+    }
 }
 
 void context_reset(void)
@@ -1961,8 +1994,6 @@ void retro_unload_game(void)
        environ_clear_thread_waits_cb(1, NULL);
     }
 
-    CoreDoCommand(M64CMD_ROM_CLOSE, 0, NULL);
-
     if(current_rdp_type == RDP_PLUGIN_GLIDEN64 && EnableThreadedRenderer)
     {
        CoreDoCommand(M64CMD_STOP, 0, NULL);
@@ -1978,6 +2009,8 @@ void retro_unload_game(void)
        pthread_join(emuThread, NULL);
 
        environ_clear_thread_waits_cb(0, NULL);
+
+       CoreDoCommand(M64CMD_ROM_CLOSE, 0, NULL);
     }
 
     cleanup_global_paths();

@@ -92,13 +92,8 @@ void DisplayWindowMupen64plus::_stop()
 void DisplayWindowMupen64plus::_restart()
 {
 #ifdef M64P_GLIDENUI
-	if (_supportsWithRateFunctions && m_bFullscreen) {
-		m_resizeWidth = config.video.fullscreenWidth;
-		m_resizeHeight = config.video.fullscreenHeight;
-	} else {
-		m_resizeWidth = config.video.windowedWidth;
-		m_resizeHeight = config.video.windowedHeight;
-	}
+	m_resizeWidth = 0;
+	m_resizeHeight = 0;
 #endif // M64P_GLIDENUI
 }
 
@@ -124,6 +119,7 @@ bool DisplayWindowMupen64plus::_resizeWindow()
 	m_bFullscreen = true;
 	m_width = m_screenWidth = m_resizeWidth;
 	m_height = m_screenHeight = m_resizeHeight;
+	_setBufferSize();
 	opengl::Utils::isGLError(); // reset GL error.
 
 	return true;

@@ -27,12 +27,15 @@ void _loadSettings(QSettings & settings)
 	config.video.fullscreenHeight = settings.value("fullscreenHeight", config.video.fullscreenHeight).toInt();
 	config.video.windowedWidth = settings.value("windowedWidth", config.video.windowedWidth).toInt();
 	config.video.windowedHeight = settings.value("windowedHeight", config.video.windowedHeight).toInt();
+	config.video.borderless = settings.value("borderless", config.video.borderless).toInt();
 	config.video.fullscreenRefresh = settings.value("fullscreenRefresh", config.video.fullscreenRefresh).toInt();
 	config.video.multisampling = settings.value("multisampling", config.video.multisampling).toInt();
 	config.video.maxMultiSampling = settings.value("maxMultiSampling", config.video.maxMultiSampling).toInt();
 	config.video.fxaa= settings.value("fxaa", config.video.fxaa).toInt();
 	config.video.verticalSync = settings.value("verticalSync", config.video.verticalSync).toInt();
 	config.video.threadedVideo = settings.value("threadedVideo", config.video.threadedVideo).toInt();
+	QString deviceName = QString::fromWCharArray(config.video.deviceName);
+	config.video.deviceName[settings.value("deviceName", deviceName).toString().toWCharArray(config.video.deviceName)] = L'\0';
 	settings.endGroup();
 
 	settings.beginGroup("texture");
@@ -174,12 +177,14 @@ void _writeSettingsToFile(const QString & filename)
 	settings.setValue("fullscreenHeight", config.video.fullscreenHeight);
 	settings.setValue("windowedWidth", config.video.windowedWidth);
 	settings.setValue("windowedHeight", config.video.windowedHeight);
+	settings.setValue("borderless", config.video.borderless);
 	settings.setValue("fullscreenRefresh", config.video.fullscreenRefresh);
 	settings.setValue("multisampling", config.video.multisampling);
 	settings.setValue("maxMultiSampling", config.video.maxMultiSampling);
 	settings.setValue("fxaa", config.video.fxaa);
 	settings.setValue("verticalSync", config.video.verticalSync);
 	settings.setValue("threadedVideo", config.video.threadedVideo);
+	settings.setValue("deviceName", QString::fromWCharArray(config.video.deviceName));
 	settings.endGroup();
 
 	settings.beginGroup("texture");
@@ -339,9 +344,20 @@ void _loadSettingsFromFile(const QString & filename)
 	}
 }
 
-void loadSettings(const QString & _strIniFolder)
+void loadSettings(const QString & _strIniFolder, const QString & _strSharedIniFolder)
 {
-	_loadSettingsFromFile(_strIniFolder + "/" + strIniFileName);
+	QString sharedSettingsFilename = _strSharedIniFolder + "/" + strIniFileName;
+	QString settingsFilename = _strIniFolder + "/" + strIniFileName;
+	QFile settingsFile(settingsFilename);
+	QFile sharedSettingsFile(sharedSettingsFilename);
+
+	// fallback to shared file if no config file exists
+	// in the config directory yet
+	if (sharedSettingsFile.exists() && !settingsFile.exists()) {
+		_loadSettingsFromFile(sharedSettingsFilename);
+	} else {
+		_loadSettingsFromFile(settingsFilename);
+	}
 }
 
 void writeSettings(const QString & _strIniFolder)
@@ -399,26 +415,38 @@ QString _getRomName(const char * _strRomName) {
 		QString::number(Adler32(0xFFFFFFFF, bytes.data(), bytes.length()), 16).toUpper();
 }
 
-void loadCustomRomSettings(const QString & _strIniFolder, const char * _strRomName)
+void loadCustomRomSettings(const QString & _strIniFolder, const QString & _strSharedIniFolder, const char * _strRomName)
 {
 	QSettings settings(_strIniFolder + "/" + strCustomSettingsFileName, QSettings::IniFormat);
+	QSettings sharedSettings(_strSharedIniFolder + "/" + strCustomSettingsFileName, QSettings::IniFormat);
 
 	const QString romName = _getRomName(_strRomName);
-	if (settings.childGroups().indexOf(romName) < 0)
+	if (settings.childGroups().indexOf(romName) < 0 &&
+		sharedSettings.childGroups().indexOf(romName) < 0) {
 		return;
+	}
 
-	settings.beginGroup(romName);
-	_loadSettings(settings);
-	settings.endGroup();
+	if (settings.childGroups().indexOf(romName) >= 0) {
+		// use user settings
+		settings.beginGroup(romName);
+		_loadSettings(settings);
+		settings.endGroup();
+	} else {
+		// use shared settings
+		sharedSettings.beginGroup(romName);
+		_loadSettings(sharedSettings);
+		sharedSettings.endGroup();
+	}
+
 	config.version = CONFIG_VERSION_CURRENT;
 }
 
-void saveCustomRomSettings(const QString & _strIniFolder, const char * _strRomName)
+void saveCustomRomSettings(const QString & _strIniFolder, const QString & _strSharedIniFolder, const char * _strRomName)
 {
 	Config origConfig;
 	origConfig.resetToDefaults();
 	std::swap(config, origConfig);
-	loadSettings(_strIniFolder);
+	loadSettings(_strIniFolder, _strSharedIniFolder);
 	std::swap(config, origConfig);
 
 	QSettings settings(_strIniFolder + "/" + strCustomSettingsFileName, QSettings::IniFormat);
@@ -450,6 +478,7 @@ void saveCustomRomSettings(const QString & _strIniFolder, const char * _strRomNa
 	WriteCustomSetting(video, fullscreenHeight);
 	WriteCustomSetting(video, windowedWidth);
 	WriteCustomSetting(video, windowedHeight);
+	WriteCustomSetting(video, borderless);
 	WriteCustomSetting(video, fullscreenRefresh);
 	WriteCustomSetting(video, multisampling);
 	WriteCustomSetting(video, fxaa);
@@ -577,13 +606,13 @@ QString getCurrentProfile(const QString & _strIniFolder)
 	return settings.value("profile", strUserProfile).toString();
 }
 
-void changeProfile(const QString & _strIniFolder, const QString & _strProfile)
+void changeProfile(const QString & _strIniFolder, const QString & _strSharedIniFolder, const QString & _strProfile)
 {
 	{
 		QSettings settings(_strIniFolder + "/" + strIniFileName, QSettings::IniFormat);
 		settings.setValue("profile", _strProfile);
 	}
-	loadSettings(_strIniFolder);
+	loadSettings(_strIniFolder, _strSharedIniFolder);
 }
 
 void addProfile(const QString & _strIniFolder, const QString & _strProfile)

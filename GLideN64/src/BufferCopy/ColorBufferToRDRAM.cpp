@@ -41,7 +41,7 @@ void ColorBufferToRDRAM::destroy() {
 
 bool ColorBufferToRDRAM::_prepareCopy(u32& _startAddress)
 {
-	if (VI.width == 0 || frameBufferList().getCurrent() == nullptr)
+	if (VI.width == 0)
 		return false;
 
 	FrameBuffer * pBuffer = frameBufferList().findBuffer(_startAddress);
@@ -67,11 +67,6 @@ bool ColorBufferToRDRAM::_prepareCopy(u32& _startAddress)
 	CachedTexture* colorBufferTexture = pBuffer->getColorFbTexture();
 
 	m_pCurFrameBuffer = pBuffer;
-
-	if ((config.generalEmulation.hacks & hack_subscreen) != 0 && m_pCurFrameBuffer->m_width == VI.width) {
-		copyWhiteToRDRAM(m_pCurFrameBuffer);
-		return false;
-	}
 
 	ObjectHandle readBuffer;
 
@@ -176,6 +171,10 @@ u16 ColorBufferToRDRAM::_RGBAtoRGBA16(u32 _c, u32 x, u32 y) {
 		}
 	}
 
+	if ((config.generalEmulation.hacks & hack_paper_mario_subscreen) != 0 && c.b > 0x00 && c.b <= 0xFB)
+		// Paper Mario subscreen fix
+		c.b += 0x04;
+
 	return ((c.r >> 3) << 11) | ((c.g >> 3) << 6) | ((c.b >> 3) << 1) | (c.a == 0 ? 0 : 1);
 }
 
@@ -215,7 +214,10 @@ void ColorBufferToRDRAM::_copy(u32 _startAddress, u32 _endAddress, bool _sync)
 		u32 *ptr_src = (u32*)pPixels;
 		u16 *ptr_dst = (u16*)(RDRAM + _startAddress);
 		m_blueNoiseIdx++;
-		writeToRdram<u32, u16>(ptr_src, ptr_dst, &ColorBufferToRDRAM::_RGBAtoRGBA16, valueTester<u32, 0>, 1, width, height, numPixels, _startAddress, m_pCurFrameBuffer->m_startAddress, m_pCurFrameBuffer->m_size);
+		if ((config.generalEmulation.hacks & hack_subscreen) != 0u && height == 1u)
+			copyWhiteToRDRAM(m_pCurFrameBuffer);
+		else
+			writeToRdram<u32, u16>(ptr_src, ptr_dst, &ColorBufferToRDRAM::_RGBAtoRGBA16, dummyTester<u32>, 1, width, height, numPixels, _startAddress, m_pCurFrameBuffer->m_startAddress, m_pCurFrameBuffer->m_size);
 	} else if (m_pCurFrameBuffer->m_size == G_IM_SIZ_8b) {
 		u8 *ptr_src = (u8*)pPixels;
 		u8 *ptr_dst = RDRAM + _startAddress;
@@ -236,7 +238,7 @@ void ColorBufferToRDRAM::copyToRDRAM(u32 _address, bool _sync)
 		return;
 	if (!_prepareCopy(_address))
 		return;
-	if (config.frameBufferEmulation.copyToRDRAM == Config::CopyToRDRAM::ctDisable)
+	if (config.frameBufferEmulation.copyToRDRAM == Config::CopyToRDRAM::ctDisable && config.frameBufferEmulation.fbInfoDisabled != 0)
 		return;
 
 	const u32 numBytes = (m_pCurFrameBuffer->m_width*m_pCurFrameBuffer->m_height) << m_pCurFrameBuffer->m_size >> 1;

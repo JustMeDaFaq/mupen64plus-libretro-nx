@@ -28,12 +28,6 @@
 using namespace graphics;
 
 GraphicsDrawer::GraphicsDrawer()
-: m_drawingState(DrawingState::Non)
-, m_dmaVerticesNum(0)
-, m_modifyVertices(0)
-, m_maxLineWidth(1.0f)
-, m_bFlatColors(false)
-, m_bBGMode(false)
 {
 	memset(m_rect, 0, sizeof(m_rect));
 }
@@ -618,6 +612,16 @@ void GraphicsDrawer::setBlendMode(bool _forceLegacyBlending) const
 	_ordinaryBlending();
 }
 
+void GraphicsDrawer::setBgDepthCopyMode(BgDepthCopyMode mode)
+{
+	m_depthCopyMode = mode;
+}
+
+GraphicsDrawer::BgDepthCopyMode GraphicsDrawer::getBgDepthCopyMode() const
+{
+	return m_depthCopyMode;
+}
+
 void GraphicsDrawer::_updateTextures() const
 {
 	//For some reason updating the texture cache on the first frame of LOZ:OOT causes a nullptr Pointer exception...
@@ -668,10 +672,121 @@ void GraphicsDrawer::_updateStates(DrawingState _drawingState) const
 
 	cmbInfo.updateParameters();
 
-	if (!config.generalEmulation.enableFragmentDepthWrite)
+	if (config.generalEmulation.enableFragmentDepthWrite == 0u)
 		return;
 
-	if (isCurrentColorImageDepthImage() &&
+	auto setDepthCopyParameters = []() {
+		gfxContext.enable(enable::DEPTH_TEST, true);
+		gfxContext.setDepthCompare(compare::ALWAYS);
+		gfxContext.enableDepthWrite(true);
+		gDP.changed |= CHANGED_RENDERMODE;
+	};
+
+	if (m_depthCopyMode >= BgDepthCopyMode::eBg1cyc) {
+		DepthBufferList & dbList = depthBufferList();
+		FrameBufferList & fbList = frameBufferList();
+
+		// The game copies content of depth buffer into current color buffer
+		// OpenGL has different format for color and depth buffers, so this trick can't be performed directly
+		// To do that, depth buffer with address of current color buffer created and attached to the current FBO
+		// It will be copy depth buffer
+		dbList.saveBuffer(gDP.colorImage.address);
+
+		if (config.frameBufferEmulation.N64DepthCompare != Config::dcDisable) {
+			DepthBuffer * pFromDepthBuffer = dbList.findBuffer(gSP.bgImage.address);
+			if (pFromDepthBuffer == nullptr)
+				return;
+
+			DepthBuffer * pToDepthBuffer = dbList.findBuffer(gDP.colorImage.address);
+			if (pToDepthBuffer == nullptr)
+				return;
+
+			if (Context::FramebufferFetchDepth) {
+				FrameBuffer * pFrameBuffer = fbList.findBuffer(gDP.colorImage.address);
+				if (pFrameBuffer == nullptr)
+					return;
+				Context::FrameBufferRenderTarget targetParams;
+				targetParams.bufferHandle = pFrameBuffer->m_FBO;
+				targetParams.bufferTarget = bufferTarget::DRAW_FRAMEBUFFER;
+				targetParams.attachment = bufferAttachment::COLOR_ATTACHMENT1;
+				targetParams.textureHandle = pFromDepthBuffer->m_pDepthImageZTexture->name;
+				targetParams.textureTarget = textureTarget::TEXTURE_2D;
+				gfxContext.addFrameBufferRenderTarget(targetParams);
+
+				targetParams.attachment = bufferAttachment::COLOR_ATTACHMENT2;
+				targetParams.textureHandle = pFromDepthBuffer->m_pDepthImageDeltaZTexture->name;
+				gfxContext.addFrameBufferRenderTarget(targetParams);
+
+				targetParams.attachment = bufferAttachment::COLOR_ATTACHMENT3;
+				targetParams.textureHandle = pToDepthBuffer->m_pDepthImageZTexture->name;
+				gfxContext.addFrameBufferRenderTarget(targetParams);
+
+				targetParams.attachment = bufferAttachment::COLOR_ATTACHMENT4;
+				targetParams.textureHandle = pToDepthBuffer->m_pDepthImageDeltaZTexture->name;
+				gfxContext.addFrameBufferRenderTarget(targetParams);
+
+				gfxContext.setDrawBuffers(5);
+			} else if (Context::ImageTextures) {
+				Context::BindImageTextureParameters bindParams;
+				bindParams.imageUnit = textureImageUnits::DepthZ;
+				bindParams.texture = pFromDepthBuffer->m_pDepthImageZTexture->name;
+				bindParams.accessMode = textureImageAccessMode::READ_WRITE;
+				bindParams.textureFormat = gfxContext.getFramebufferTextureFormats().depthImageInternalFormat;
+				gfxContext.bindImageTexture(bindParams);
+
+				bindParams.imageUnit = textureImageUnits::DepthDeltaZ;
+				bindParams.texture = pFromDepthBuffer->m_pDepthImageDeltaZTexture->name;
+				gfxContext.bindImageTexture(bindParams);
+
+				bindParams.imageUnit = textureImageUnits::DepthZCopy;
+				bindParams.texture = pToDepthBuffer->m_pDepthImageZTexture->name;
+				gfxContext.bindImageTexture(bindParams);
+
+				bindParams.imageUnit = textureImageUnits::DepthDeltaZCopy;
+				bindParams.texture = pToDepthBuffer->m_pDepthImageDeltaZTexture->name;
+				gfxContext.bindImageTexture(bindParams);
+			}
+			return;
+		}
+
+		FrameBuffer * pCopyDepthFrameBuffer = fbList.findBuffer(gSP.bgImage.address);
+		if (pCopyDepthFrameBuffer == nullptr)
+			return;
+
+		DepthBuffer * pCopyDepthBuffer = dbList.findBuffer(gSP.bgImage.address);
+		if (pCopyDepthBuffer == nullptr)
+			return;
+
+		CachedTexture * pCopyDepthTex = pCopyDepthBuffer->resolveDepthBufferTexture(pCopyDepthFrameBuffer);
+		if (pCopyDepthTex == nullptr)
+			return;
+
+		Context::TexParameters params;
+		params.handle = pCopyDepthTex->name;
+		params.target = textureTarget::TEXTURE_2D;
+		params.textureUnitIndex = textureIndices::Tex[0];
+		params.maxMipmapLevel = 0;
+		params.minFilter = textureParameters::FILTER_NEAREST;
+		params.magFilter = textureParameters::FILTER_NEAREST;
+		gfxContext.setTextureParameters(params);
+
+		if (m_depthCopyMode == BgDepthCopyMode::eBgCopy) {
+			FrameBuffer * pCurDepthFrameBuffer = fbList.findBuffer(gDP.depthImageAddress);
+			if (pCurDepthFrameBuffer == nullptr)
+				return;
+			CachedTexture * pCurDepthTexture = pCurDepthFrameBuffer->m_pDepthBuffer->copyDepthBufferTexture(pCurDepthFrameBuffer);
+			if (pCurDepthTexture == nullptr)
+				return;
+
+			params.handle = pCurDepthTexture->name;
+			params.textureUnitIndex = textureIndices::DepthTex;
+			gfxContext.setTextureParameters(params);
+		}
+
+		setDepthCopyParameters();
+		gDP.changed |= CHANGED_TMEM;
+	} else if (m_depthCopyMode != BgDepthCopyMode::eCopyDone &&
+		isCurrentColorImageDepthImage() &&
 		config.generalEmulation.enableFragmentDepthWrite != 0 &&
 		config.frameBufferEmulation.N64DepthCompare == Config::dcDisable) {
 		// Current render target is depth buffer.
@@ -697,10 +812,7 @@ void GraphicsDrawer::_updateStates(DrawingState _drawingState) const
 			gfxContext.enable(enable::BLEND, true);
 			gfxContext.setBlending(blend::ZERO, blend::ONE);
 		}
-		gfxContext.enable(enable::DEPTH_TEST, true);
-		gfxContext.setDepthCompare(compare::ALWAYS);
-		gfxContext.enableDepthWrite(true);
-		gDP.changed |= CHANGED_RENDERMODE;
+		setDepthCopyParameters();
 	}
 }
 
@@ -814,7 +926,7 @@ void GraphicsDrawer::drawScreenSpaceTriangle(u32 _numVtx, graphics::DrawModePara
 	m_dmaVerticesNum = 0;
 
 	if (config.frameBufferEmulation.enable != 0) {
-		const f32 maxY = renderScreenSpaceTriangles(m_dmaVertices.data(), _numVtx);
+		const f32 maxY = renderScreenSpaceTriangles(m_dmaVertices.data(), _numVtx, _mode);
 		frameBufferList().setBufferChanged(maxY);
 		if (config.frameBufferEmulation.copyDepthToRDRAM == Config::cdSoftwareRender &&
 			gDP.otherMode.depthUpdate != 0) {
@@ -1217,7 +1329,7 @@ void GraphicsDrawer::drawTexturedRect(const TexturedRectParams & _params)
 			return;
 		}
 
-		if (!_canDraw())
+		if (_params.texrectCmd && !_canDraw())
 			return;
 	}
 
@@ -1226,15 +1338,21 @@ void GraphicsDrawer::drawTexturedRect(const TexturedRectParams & _params)
 	DisplayWindow & wnd = dwnd();
 	TextureCache & cache = textureCache();
 	const bool bUseBilinear = gDP.otherMode.textureFilter != 0;
+	bool bUseFbTexture = false;
+	bool bUseHdTexture = false;
+	for (u32 i = 0; i < 2; ++i) {
+		if (pCurrentCombiner->usesTile(i) && cache.current[i] != nullptr) {
+			bUseFbTexture |= cache.current[i]->frameBufferTexture != CachedTexture::fbNone;
+			bUseHdTexture |= cache.current[i]->bHDTexture;
+		}
+	}
 	const bool bUseTexrectDrawer = m_bBGMode || ((config.graphics2D.enableNativeResTexrects != 0)
 		&& bUseBilinear
 		&& pCurrentCombiner->usesTexture()
 		&& (pCurrentBuffer == nullptr || !pCurrentBuffer->m_cfb)
 		&& (cache.current[0] != nullptr)
 		//		&& (cache.current[0] == nullptr || cache.current[0]->format == G_IM_FMT_RGBA || cache.current[0]->format == G_IM_FMT_CI)
-		&& ((cache.current[0]->frameBufferTexture == CachedTexture::fbNone && !cache.current[0]->bHDTexture))
-		&& (cache.current[1] == nullptr || (cache.current[1]->frameBufferTexture == CachedTexture::fbNone && !cache.current[1]->bHDTexture)));
-
+		&& !bUseFbTexture && !bUseHdTexture);
 	const float Z = (gDP.otherMode.depthSource == G_ZS_PRIM) ? gDP.primDepth.z : 0.0f;
 	const float W = 1.0f;
 	const f32 ulx = _params.ulx;
@@ -1358,12 +1476,12 @@ void GraphicsDrawer::drawTexturedRect(const TexturedRectParams & _params)
 		m_rect[2].t1 = texST[1].t1;
 	}
 
-	if (wnd.isAdjustScreen() &&
+	if (wnd.isAdjustScreen() && !bUseFbTexture &&
 		(_params.forceAjustScale ||
 		((gDP.colorImage.width > VI.width * 98 / 100) && (static_cast<u32>(_params.lrx - _params.ulx) < VI.width * 9 / 10))))
 	{
 		const float scale = wnd.getAdjustScale();
-		const float offsetx = static_cast<f32>(gDP.colorImage.width) * (1.0f-scale) / 2.0f;
+		const float offsetx = static_cast<f32>(gDP.colorImage.width) * (1.0f - scale) / 2.0f;
 		for (u32 i = 0; i < 4; ++i) {
 			m_rect[i].x *= scale;
 			m_rect[i].x += offsetx;

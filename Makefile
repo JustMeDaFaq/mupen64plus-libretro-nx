@@ -113,6 +113,8 @@ ifneq (,$(findstring unix,$(platform)))
    endif
 
    ifneq (,$(findstring armv,$(platform)))
+      ARCH = arm
+      WITH_DYNAREC = arm
       CPUFLAGS += -DARM -marm
       ifneq (,$(findstring cortexa8,$(platform)))
          CPUFLAGS += -mcpu=cortex-a8
@@ -145,6 +147,7 @@ else ifneq (,$(findstring rpi,$(platform)))
       MESA = 1
    endif
    ifneq (,$(findstring rpi4,$(platform)))
+      GLES3 = 1
       MESA = 1
    endif
    ifeq ($(MESA), 1)
@@ -161,11 +164,29 @@ else ifneq (,$(findstring rpi,$(platform)))
       CPUFLAGS += -mcpu=cortex-a7
       ARM_CPUFLAGS = -mfpu=neon-vfpv4
    else ifneq (,$(findstring rpi3,$(platform)))
-      CPUFLAGS += -march=armv8-a+crc -mtune=cortex-a53
-      ARM_CPUFLAGS = -mfpu=neon-fp-armv8
+      ifneq (,$(findstring rpi3_64,$(platform)))
+         CPUFLAGS += -mcpu=cortex-a53 -mtune=cortex-a53
+      else
+         CPUFLAGS += -march=armv8-a+crc -mtune=cortex-a53
+         ARM_CPUFLAGS = -mfpu=neon-fp-armv8
+      endif
    else ifneq (,$(findstring rpi4,$(platform)))
-      CPUFLAGS += -march=armv8-a+crc -mtune=cortex-a72
-      ARM_CPUFLAGS = -mfpu=neon-fp-armv8
+      ifneq (,$(findstring rpi4_64,$(platform)))
+         CPUFLAGS += -mcpu=cortex-a72 -mtune=cortex-a72
+      else
+         CPUFLAGS += -march=armv8-a+crc -mtune=cortex-a72
+         ARM_CPUFLAGS = -mfpu=neon-fp-armv8
+      endif
+   else ifneq (,$(findstring rpi5,$(platform)))
+      ifneq (,$(findstring rpi5_64,$(platform)))
+         CPUFLAGS += -mcpu=cortex-a76 -mtune=cortex-a76
+      else
+         CPUFLAGS += -march=armv8-a+crc+crypto -mtune=cortex-a76
+         ARM_CPUFLAGS = -mfpu=neon-fp-armv8
+      endif
+      HAVE_PARALLEL_RSP = 1
+      HAVE_THR_AL = 1
+      LLE = 1
    else ifneq (,$(findstring rpi,$(platform)))
       CPUFLAGS += -mcpu=arm1176jzf-s
       ARM_CPUFLAGS = -mfpu=vfp
@@ -227,6 +248,10 @@ else ifneq (,$(findstring odroid64,$(platform)))
    ifneq (,$(findstring C2,$(BOARD)))
       # ODROID-C2
       CPUFLAGS += -mcpu=cortex-a53
+   else ifneq (,$(findstring C4,$(BOARD)))
+      # ODROID-C4
+      CPUFLAGS += -mcpu=cortex-a55
+      GLES3 = 1
    else ifneq (,$(findstring N1,$(BOARD)))
       # ODROID-N1
       CPUFLAGS += -mcpu=cortex-a72.cortex-a53
@@ -321,6 +346,28 @@ else ifneq (,$(findstring amlogic,$(platform)))
    COREFLAGS += -DUSE_GENERIC_GLESV2 -DOS_LINUX
    CPUFLAGS += -march=armv8-a -mcpu=cortex-a53 -mtune=cortex-a53
 
+# Generic AArch64 Cortex-A53 GLES 2.0 target
+else ifneq (,$(findstring arm64_cortex_a53_gles2,$(platform)))
+   TARGET := $(TARGET_NAME)_libretro.so
+   LDFLAGS += -shared -Wl,--version-script=$(LIBRETRO_DIR)/link.T -Wl,--no-undefined -ldl
+   GL_LIB := -lGLESv2
+   WITH_DYNAREC := aarch64
+   CPUFLAGS += -mcpu=cortex-a53 -mtune=cortex-a53
+   GLES = 1
+   COREFLAGS += -DOS_LINUX
+   ASFLAGS = -f elf64 -d ELF_TYPE
+
+# Generic AArch64 Cortex-A53 GLES 3.0 target
+else ifneq (,$(findstring arm64_cortex_a53_gles3,$(platform)))
+   TARGET := $(TARGET_NAME)_libretro.so
+   LDFLAGS += -shared -Wl,--version-script=$(LIBRETRO_DIR)/link.T -Wl,--no-undefined -ldl
+   GL_LIB := -lGLESv2
+   WITH_DYNAREC := aarch64
+   CPUFLAGS += -mcpu=cortex-a53 -mtune=cortex-a53
+   GLES3 = 1
+   COREFLAGS += -DOS_LINUX
+   ASFLAGS = -f elf64 -d ELF_TYPE
+
 # Rockchip RK3288 e.g. Asus Tinker Board / RK3328 e.g. PINE64 Rock64 / RK3399 e.g. PINE64 RockPro64 - 32-bit userspace
 else ifneq (,$(findstring RK,$(platform)))
    TARGET := $(TARGET_NAME)_libretro.so
@@ -359,16 +406,27 @@ else ifneq (,$(findstring osx,$(platform)))
         LDFLAGS += -mmacosx-version-min=10.7
    LDFLAGS += -stdlib=libc++
 
-   PLATCFLAGS += -D__MACOSX__ -DOSX -DOS_MAC_OS_X
+   PLATCFLAGS += -D__MACOSX__ -DOSX -DOS_MAC_OS_X -DHAVE_UNISTD_H=1 -DHAVE_POSIX_MEMALIGN -DNO_ASM -DGL_SILENCE_DEPRECATION=1
    GL_LIB := -framework OpenGL
 
    # Target Dynarec
-   ifeq ($(ARCH), $(filter $(ARCH), ppc))
-      WITH_DYNAREC =
-   endif
+   WITH_DYNAREC =
+
+   HAVE_PARALLEL_RSP = 1
+   HAVE_PARALLEL_RDP = 1
+   HAVE_THR_AL = 1
+   LLE = 1
 
    COREFLAGS += -DOS_LINUX
    ASFLAGS = -f elf -d ELF_TYPE
+
+   ifeq ($(CROSS_COMPILE),1)
+      TARGET_RULE   = -target $(LIBRETRO_APPLE_PLATFORM) -isysroot $(LIBRETRO_APPLE_ISYSROOT)
+      CFLAGS   += $(TARGET_RULE)
+      CPPFLAGS += $(TARGET_RULE)
+      CXXFLAGS += $(TARGET_RULE)
+      LDFLAGS  += $(TARGET_RULE)
+   endif
 # iOS
 else ifneq (,$(findstring ios,$(platform)))
    ifeq ($(IOSSDK),)
@@ -379,15 +437,21 @@ else ifneq (,$(findstring ios,$(platform)))
    DEFINES += -DIOS
    GLES = 1
 	ifeq ($(platform),ios-arm64)
+		HAVE_PARALLEL_RSP = 1
+		HAVE_PARALLEL_RDP = 1
+		HAVE_THR_AL = 1
+		LLE = 1
 		WITH_DYNAREC=
 		GLES=1
 		GLES3=1
 		FORCE_GLES3=1
 		EGL := 0
-		PLATCFLAGS += -DHAVE_POSIX_MEMALIGN -DNO_ASM
-		PLATCFLAGS += -DIOS -marm -DOS_IOS -DDONT_WANT_ARM_OPTIMIZATIONS
-		CPUFLAGS += -marm -mfpu=neon -mfloat-abi=softfp
-		HAVE_NEON=0
+		HAVE_PARALLEL_RDP = 1
+		PLATCFLAGS += -DHAVE_POSIX_MEMALIGN -DIOS -DOS_IOS
+		PLATCFLAGS += -Ofast -ffast-math -funsafe-math-optimizations -DNO_ASM
+		COREFLAGS  += -Ofast -ffast-math -funsafe-math-optimizations -DNO_ASM
+		CPUFLAGS   += -Ofast -ffast-math -funsafe-math-optimizations -DNO_ASM
+		HAVE_NEON=1
 		CC         += -miphoneos-version-min=8.0
 		CC_AS      += -miphoneos-version-min=8.0
 		CXX        += -miphoneos-version-min=8.0
@@ -410,6 +474,39 @@ else ifneq (,$(findstring ios,$(platform)))
 		CC_AS = perl ./custom/tools/gas-preprocessor.pl $(CC)
 		CXX = clang++ -arch armv7 -isysroot $(IOSSDK)
 	endif
+   LDFLAGS += -dynamiclib
+   GL_LIB := -framework OpenGLES
+# tvOS
+else ifneq (,$(findstring tvos,$(platform)))
+   ifeq ($(TVOSSDK),)
+      TVOSSDK := $(shell xcodebuild -version -sdk appletvos Path)
+   endif
+
+   TARGET := $(TARGET_NAME)_libretro_tvos.dylib
+   DEFINES += -DIOS -DTVOS
+   GLES = 1
+
+   WITH_DYNAREC=
+   GLES=1
+   GLES3=1
+   FORCE_GLES3=1
+   EGL := 0
+   HAVE_PARALLEL_RSP = 1
+   HAVE_PARALLEL_RDP = 1
+   HAVE_THR_AL = 1
+   LLE = 1
+   PLATCFLAGS += -DHAVE_POSIX_MEMALIGN -DIOS -DOS_IOS
+   PLATCFLAGS += -Ofast -ffast-math -funsafe-math-optimizations -DNO_ASM
+   COREFLAGS  += -Ofast -ffast-math -funsafe-math-optimizations -DNO_ASM
+   CPUFLAGS   += -Ofast -ffast-math -funsafe-math-optimizations -DNO_ASM
+   HAVE_NEON=1
+   CC         += -mappletvos-version-min=8.0
+   CC_AS      += -mappletvos-version-min=8.0
+   CXX        += -mappletvos-version-min=8.0
+   PLATCFLAGS += -mappletvos-version-min=8.0 -Wno-error=implicit-function-declaration
+   CC = clang -arch arm64 -isysroot $(TVOSSDK)
+   CXX = clang++ -arch arm64 -isysroot $(TVOSSDK)
+
    LDFLAGS += -dynamiclib
    GL_LIB := -framework OpenGLES
 # Android
@@ -522,7 +619,7 @@ endif
 ifeq ($(STATIC_LINKING), 1)
    ifneq (,$(findstring win,$(platform)))
       TARGET := $(TARGET:.dll=.lib)
-   else ifneq ($(platform), $(filter $(platform), osx ios))
+   else ifneq ($(platform), $(filter $(platform), osx ios tvos))
       TARGET := $(TARGET:.dylib=.a)            
    else
       TARGET := $(TARGET:.so=.a)
@@ -532,7 +629,10 @@ endif
 include Makefile.common
 
 ifeq ($(HAVE_NEON), 1)
-   COREFLAGS += -DHAVE_NEON -D__ARM_NEON__ -D__NEON_OPT -ftree-vectorize -mvectorize-with-neon-quad -ftree-vectorizer-verbose=2 -funsafe-math-optimizations -fno-finite-math-only
+   COREFLAGS += -DHAVE_NEON -D__ARM_NEON__ -D__NEON_OPT -ftree-vectorize -funsafe-math-optimizations -fno-finite-math-only -DUSE_SSE2NEON
+   ifeq (,$(filter $(platform),ios-arm64 tvos-arm64))
+      COREFLAGS += -mvectorize-with-neon-quad -ftree-vectorizer-verbose=2
+   endif
 endif
 
 ifeq ($(LLE), 1)
@@ -611,12 +711,15 @@ $(AWK_DEST_DIR)/asm_defines_nasm.h: $(ASM_DEFINES_OBJ)
 %.o: %.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
+$(RSPDIR_PARALLEL)/lightning/lib/lightning.o: $(RSPDIR_PARALLEL)/lightning/lib/lightning.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -DHAVE_MMAP=1 -c $< -o $@
+
 %.o: %.cpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
 
 clean:
-	find -name "*.o" -type f -delete
-	find -name "*.d" -type f -delete
+	find $(ROOT_DIR) -name "*.o" -type f -delete
+	find $(ROOT_DIR) -name "*.d" -type f -delete
 	rm -f $(TARGET)
 
 .PHONY: clean
